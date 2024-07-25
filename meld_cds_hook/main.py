@@ -1,11 +1,11 @@
 from fastapi import FastAPI
 from typing import Any, Dict, Optional
-from pydantic import BaseModel, HttpUrl
+from pydantic import field_validator, BaseModel, HttpUrl
 from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
 from math import log
 from datetime import datetime
-from pydantic import BaseModel, validator, ValidationError
+from pydantic import BaseModel, ValidationError
 
 app = FastAPI()
 
@@ -97,13 +97,15 @@ class MeldScoreParams(BaseModel):
     had_dialysis: bool
     dob: datetime
 
-    @validator("sex")
+    @field_validator("sex")
+    @classmethod
     def validate_sex(cls, v):
         if v.lower() not in ["male", "female"]:
             raise ValueError('sex must be either "male" or "female"')
         return v
 
-    @validator("bilirubin", "sodium", "inr", "albumin", "creatinine")
+    @field_validator("bilirubin", "sodium", "inr", "albumin", "creatinine")
+    @classmethod
     def validate_positive(cls, v):
         if v <= 0:
             raise ValueError("value must be positive")

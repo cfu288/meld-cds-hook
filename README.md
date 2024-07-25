@@ -20,3 +20,11 @@ To run the application in development mode, follow these steps:
    ```
 
 You can test the CDS hook using the [CDS Hooks Sandbox](https://sandbox.cds-hooks.org/).
+
+## Running Tests
+
+To run the tests, execute the following command:
+
+```bash
+poetry run pytest
+```
