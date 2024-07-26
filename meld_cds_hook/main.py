@@ -62,7 +62,7 @@ def meld_optn_hook(request: HookRequest):
         "cards": [
             {
                 "uuid": uuid4(),
-                "summary": "MELD Score (OPTN): 15",
+                "summary": "MELD Score (OPTN): 14",
                 "indicator": "info",
                 "detail": f"""
 | Parameter   | Value   | Date   |
@@ -97,6 +97,13 @@ class MeldScoreParams(BaseModel):
     had_dialysis: bool
     dob: datetime
 
+    @field_validator("dob")
+    @classmethod
+    def validate_dob(cls, v):
+        if v > datetime.now():
+            raise ValueError("dob must be less than or equal to the current date")
+        return v
+
     @field_validator("sex")
     @classmethod
     def validate_sex(cls, v):
@@ -104,11 +111,39 @@ class MeldScoreParams(BaseModel):
             raise ValueError('sex must be either "male" or "female"')
         return v
 
-    @field_validator("bilirubin", "sodium", "inr", "albumin", "creatinine")
+    @field_validator("bilirubin")
     @classmethod
-    def validate_positive(cls, v):
-        if v <= 0:
-            raise ValueError("value must be positive")
+    def validate_bilirubin(cls, v):
+        if not (0 <= v <= 99):
+            raise ValueError("bilirubin must be between 0 and 99 mg/dL")
+        return v
+
+    @field_validator("sodium")
+    @classmethod
+    def validate_sodium(cls, v):
+        if not (100 <= v <= 200):
+            raise ValueError("sodium must be between 100 and 200 mEq/L")
+        return v
+
+    @field_validator("inr")
+    @classmethod
+    def validate_inr(cls, v):
+        if not (0.5 <= v <= 99):
+            raise ValueError("INR must be between 0.5 and 99")
+        return v
+
+    @field_validator("albumin")
+    @classmethod
+    def validate_albumin(cls, v):
+        if not (0.5 <= v <= 9.9):
+            raise ValueError("albumin must be between 0.5 and 9.9 g/dL")
+        return v
+
+    @field_validator("creatinine")
+    @classmethod
+    def validate_creatinine(cls, v):
+        if not (0.01 <= v <= 40):
+            raise ValueError("creatinine must be between 0.01 and 40 mg/dL")
         return v
 
 
@@ -118,8 +153,8 @@ def calculate_meld_score(params: MeldScoreParams) -> Optional[float]:
         today = datetime.today()
         age = today.year - params.dob.year - ((today.month, today.day) < (params.dob.month, params.dob.day))
 
-        # Only calculate if age > 18
-        if age <= 18:
+        # Only calculate if age >= 12
+        if age < 12:
             return None
 
         # Apply constraints to input values
@@ -133,17 +168,29 @@ def calculate_meld_score(params: MeldScoreParams) -> Optional[float]:
         if creatinine > 3.0 or params.had_dialysis:
             creatinine = 3.0
 
-        meld_score = (
-            (1.33 if params.sex.lower() == "female" else 0)
-            + (4.56 * log(bilirubin))
-            + (0.82 * (137 - sodium))
-            - (0.24 * (137 - sodium) * log(bilirubin))
-            + (9.09 * log(inr))
-            + (11.14 * log(creatinine))
-            + (1.85 * (3.5 - albumin))
-            - (1.83 * (3.5 - albumin) * log(creatinine))
-            + 6
-        )
+        if 12 <= age < 18:
+            meld_score = (
+                (4.56 * log(bilirubin))
+                + (0.82 * (137 - sodium))
+                - (0.24 * (137 - sodium) * log(bilirubin))
+                + (9.09 * log(inr))
+                + (11.14 * log(creatinine))
+                + (1.85 * (3.5 - albumin))
+                - (1.83 * (3.5 - albumin) * log(creatinine))
+                + 7.33
+            )
+        else:
+            meld_score = (
+                (1.33 if params.sex.lower() == "female" else 0)
+                + (4.56 * log(bilirubin))
+                + (0.82 * (137 - sodium))
+                - (0.24 * (137 - sodium) * log(bilirubin))
+                + (9.09 * log(inr))
+                + (11.14 * log(creatinine))
+                + (1.85 * (3.5 - albumin))
+                - (1.83 * (3.5 - albumin) * log(creatinine))
+                + 6
+            )
 
         # The minimum MELD score is 6, and the maximum MELD score is 40. Values above 40 are rounded to 40 in the OPTN system. The MELD score derived from this calculation is rounded to the nearest whole number.
         meld_score = round(meld_score)
