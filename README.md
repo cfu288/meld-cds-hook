@@ -25,6 +25,12 @@ You can test the CDS hook using the [CDS Hooks Sandbox](https://sandbox.cds-hook
 
 To run the tests, execute the following command:
 
+## Test with Sandbox
+
+With the server running, you can test the CDS hook using the [CDS Hooks Sandbox](https://sandbox.cds-hooks.org/). Click on the settings gear in the top right corner and enter the following URL in the \*Enter discovery endpoint url" field: [http://localhost:8000/cds-services](http://localhost:8000/cds-services). Then hit save. The sandbox should now attempt to discover the CDS hook and you should see the MELD CDS card displayed.
+
+## Test with pytest
+
 ```bash
 poetry run pytest
 ```

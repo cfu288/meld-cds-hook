@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TypedDict, List
 from pydantic import field_validator, BaseModel, HttpUrl
 from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
@@ -59,6 +59,26 @@ def read_root():
     }
 
 
+async def get_patient_data(
+    fhir_server: str, patient_id: str, bearer: Optional[str]
+) -> tuple[str, str]:
+    url = f"{fhir_server}/Patient/{patient_id}"
+    print(url)
+    headers = {}
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            response.raise_for_status()
+            patient_data = await response.json()
+            print(patient_data)
+            if not patient_data:
+                raise ValueError(f"No patient data found for patient ID {patient_id}.")
+            sex = patient_data.get("gender", "")
+            dob = patient_data.get("birthDate", "")
+            return sex, dob
+
+
 async def get_latest_observation_value(
     fhir_server: str, patient_id: str, loinc_code: str, bearer: Optional[str]
 ) -> Optional[tuple[float, str]]:
@@ -74,7 +94,6 @@ async def get_latest_observation_value(
                 raise ValueError(
                     f"No observations found for LOINC code {loinc_code} for the patient."
                 )
-
             value = observations[0]["resource"]["valueQuantity"]["value"]
             date = observations[0]["resource"]["effectiveDateTime"]
             return float(value), date
@@ -105,6 +124,10 @@ async def meld_optn_hook(request: HookRequest):
     had_dialysis = False
     sex = ""
     dob = ""
+    meld_score = None
+    meld_score_without_dialysis = None
+    calculation_success = False
+    calculation_errors = []
 
     if request.fhirServer and patientId:
         try:
@@ -136,6 +159,7 @@ async def meld_optn_hook(request: HookRequest):
                     LAB_LOINC_CODES.get("creatinine"),
                     accessToken,
                 ),
+                get_patient_data(request.fhirServer, patientId, accessToken),
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -169,14 +193,20 @@ async def meld_optn_hook(request: HookRequest):
             else:
                 print(f"Error fetching Creatinine value: {results[4]}")
 
+            if not isinstance(results[4], Exception):
+                sex, dob = results[5]
+                print(f"Patient sex: {sex}, DOB: {dob}")
+            else:
+                print(f"Error fetching patient data: {results[5]}")
+
         except Exception as e:
             print(f"Error in fetching observation values: {e}")
     else:
         print("FHIR server or patient ID not provided in the request.")
 
-    meld_score = None
+
     try:
-        meld_score = calculate_meld_score(
+        response = calculate_meld_score(
             MeldScoreParams(
                 sex=sex,
                 bilirubin=bilirubin_value,
@@ -184,32 +214,46 @@ async def meld_optn_hook(request: HookRequest):
                 inr=inr_value,
                 albumin=albumin_value,
                 creatinine=creatinine_value,
-                had_dialysis=had_dialysis,
+                had_dialysis=True,
                 dob=dob,
             )
         )
+        calculation_success = response["success"]
+        if calculation_success:
+            meld_score = response["value"]
+            meld_score_without_dialysis = calculate_meld_score(
+                MeldScoreParams(
+                    sex=sex,
+                    bilirubin=bilirubin_value,
+                    sodium=sodium_value,
+                    inr=inr_value,
+                    albumin=albumin_value,
+                    creatinine=creatinine_value,
+                    had_dialysis=False,
+                    dob=dob,
+                )
+            )["value"]
+        else:
+            calculation_errors = response["errors"]
+            print(f"Error calculating MELD score: {response['errors']}")
     except ValidationError as e:
+        # set calculation errors
+        calculation_errors = [error['msg'] for error in e.errors()]
         print(f"Validation error calculating MELD score: {e}")
-        meld_score = None
+
+    detail_markdown = generate_detail_markdown(
+        calculation_success, meld_score, meld_score_without_dialysis, calculation_errors,
+        bilirubin_value, bilirubin_date, sodium_value, sodium_date, inr_value, inr_date,
+        albumin_value, albumin_date, creatinine_value, creatinine_date, sex, dob
+    )
 
     return {
         "cards": [
             {
                 "uuid": uuid4(),
-                "summary": f"MELD Score: {meld_score if meld_score is not None else 'Not calculated'}",
+                "summary": f"MELD Score",
                 "indicator": "info",
-                "detail": f"""
-| Parameter   | Value   | Date   |
-|-------------|---------|--------|
-| Bilirubin   | {bilirubin_value if bilirubin_value != 0 else "Not found"} | {bilirubin_date if bilirubin_value != 0 else ""} |
-| Sodium      | {sodium_value if sodium_value != 0 else "Not found"}    | {sodium_date if sodium_value != 0 else ""}    |
-| INR         | {inr_value if inr_value != 0 else "Not found"}       | {inr_date if inr_value != 0 else ""}       |
-| Albumin     | {albumin_value if albumin_value != 0 else "Not found"}   | {albumin_date if albumin_value != 0 else ""}   |
-| Creatinine  | {creatinine_value if creatinine_value != 0 else "Not found"}| {creatinine_date if creatinine_value != 0 else ""}|
-| Had Dialysis| {had_dialysis}    |                  |
-| Sex         | {sex}             |                  |
-| DOB         | {dob}             |                  |
-""",
+                "detail": detail_markdown,
                 "source": {
                     "label": "OPTN",
                     "url": "https://optn.transplant.hrsa.gov/data/allocation-calculators/meld-calculator/",
@@ -219,6 +263,38 @@ async def meld_optn_hook(request: HookRequest):
         ]
     }
 
+
+def generate_detail_markdown(
+    calculation_success, meld_score, meld_score_without_dialysis, calculation_errors,
+    bilirubin_value, bilirubin_date, sodium_value, sodium_date, inr_value, inr_date,
+    albumin_value, albumin_date, creatinine_value, creatinine_date, sex, dob
+):
+    markdown_error_list = "".join(
+        [f"- {error}\n" for error in calculation_errors] if calculation_errors else []
+    )
+    markdown_score_string = (
+        f"Score with dialysis: **{meld_score}**; w/o dialysis: **{meld_score_without_dialysis}**"
+        if calculation_success
+        else "Score: Not calculated."
+    )
+
+    return f"""{markdown_score_string}
+
+Errors: \n
+{markdown_error_list}
+
+---
+
+| Parameter   | Value   | Date   |
+|-------------|---------|--------|
+| Bilirubin   | {bilirubin_value if bilirubin_value != 0 else "Not found"} | {bilirubin_date if bilirubin_value != 0 else ""} |
+| Sodium      | {sodium_value if sodium_value != 0 else "Not found"}    | {sodium_date if sodium_value != 0 else ""}    |
+| INR         | {inr_value if inr_value != 0 else "Not found"}       | {inr_date if inr_value != 0 else ""}       |
+| Albumin     | {albumin_value if albumin_value != 0 else "Not found"}   | {albumin_date if albumin_value != 0 else ""}   |
+| Creatinine  | {creatinine_value if creatinine_value != 0 else "Not found"}| {creatinine_date if creatinine_value != 0 else ""}|
+| Sex         | {sex}             |                  |
+| DOB         | {dob}             |                  |
+"""
 
 # https://optn.transplant.hrsa.gov/media/qmsdjqst/meld-peld-calculator-user-guide.pdf
 class MeldScoreParams(BaseModel):
@@ -281,7 +357,14 @@ class MeldScoreParams(BaseModel):
         return v
 
 
-def calculate_meld_score(params: MeldScoreParams) -> Optional[float]:
+class MeldScoreResponse(TypedDict):
+    value: Optional[float]
+    errors: List[str]
+    success: bool
+
+
+def calculate_meld_score(params: MeldScoreParams) -> MeldScoreResponse:
+    response: MeldScoreResponse = {"value": None, "errors": [], "success": False}
     try:
         # Calculate age
         today = datetime.today()
@@ -293,7 +376,10 @@ def calculate_meld_score(params: MeldScoreParams) -> Optional[float]:
 
         # Only calculate if age >= 12
         if age < 12:
-            return None
+            response["errors"].append(
+                "Age must be 12 or older to calculate MELD score."
+            )
+            return response
 
         # Apply constraints to input values
         bilirubin = max(params.bilirubin, 1.0)
@@ -333,10 +419,16 @@ def calculate_meld_score(params: MeldScoreParams) -> Optional[float]:
         # The minimum MELD score is 6, and the maximum MELD score is 40. Values above 40 are rounded to 40 in the OPTN system. The MELD score derived from this calculation is rounded to the nearest whole number.
         meld_score = round(meld_score)
         meld_score = min(max(meld_score, 6), 40)
-        return meld_score
+        response["value"] = meld_score
+        response["success"] = True
+        return response
     except ValidationError as e:
-        print(f"Validation error calculating MELD score: {e}")
-        return None
+        error_message = f"Validation error calculating MELD score: {e}"
+        print(error_message)
+        response["errors"].append(error_message)
+        return response
     except Exception as e:
-        print(f"Error calculating MELD score: {e}")
-        return None
+        error_message = f"Error calculating MELD score: {e}"
+        print(error_message)
+        response["errors"].append(error_message)
+        return response
