@@ -274,9 +274,9 @@ def generate_detail_markdown(
         [f"- {error}\n" for error in calculation_errors] if calculation_errors else []
     )
     markdown_score_string = (
-        f"Score with dialysis: **{meld_score}**; w/o dialysis: **{meld_score_without_dialysis}**"
+        f"**Score with dialysis:** *{meld_score}*; **w/o dialysis:** *{meld_score_without_dialysis}*"
         if calculation_success
-        else "Score: Not calculated."
+        else "**Score:** *Not calculated*"
     )
 
     return f"""{markdown_score_string}
