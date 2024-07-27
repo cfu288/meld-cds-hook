@@ -6,6 +6,9 @@ from uuid import uuid4
 from math import log
 from datetime import datetime
 from pydantic import BaseModel, ValidationError
+import requests
+import asyncio
+import aiohttp
 
 app = FastAPI()
 
@@ -56,25 +59,156 @@ def read_root():
     }
 
 
+async def get_latest_observation_value(
+    fhir_server: str, patient_id: str, loinc_code: str, bearer: Optional[str]
+) -> Optional[tuple[float, str]]:
+    url = f"{fhir_server}/Observation?patient={patient_id}&code={loinc_code}&_sort:desc=date&_count=1"
+    headers = {}
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            response.raise_for_status()
+            observations = (await response.json()).get("entry", [])
+            if not observations:
+                raise ValueError(
+                    f"No observations found for LOINC code {loinc_code} for the patient."
+                )
+
+            value = observations[0]["resource"]["valueQuantity"]["value"]
+            date = observations[0]["resource"]["effectiveDateTime"]
+            return float(value), date
+
+
 @app.post("/cds-services/meld-score-optn")
-def meld_optn_hook(request: HookRequest):
+async def meld_optn_hook(request: HookRequest):
+    LAB_LOINC_CODES = {
+        "total_bilirubin": "1975-2",
+        "sodium": "2947-0",
+        "inr": "34714-6",
+        "albumin": "1751-7",
+        "creatinine": "2160-0",
+    }
+    patientId = request.context.get("patientId")
+    accessToken = (
+        request.fhirAuthorization.get("access_token")
+        if request.fhirAuthorization
+        else None
+    )
+
+    # set default values
+    bilirubin_value, bilirubin_date = 0, ""
+    sodium_value, sodium_date = 0, ""
+    inr_value, inr_date = 0, ""
+    albumin_value, albumin_date = 0, ""
+    creatinine_value, creatinine_date = 0, ""
+    had_dialysis = False
+    sex = ""
+    dob = ""
+
+    if request.fhirServer and patientId:
+        try:
+            tasks = [
+                get_latest_observation_value(
+                    request.fhirServer, patientId, "1975-2", accessToken
+                ),
+                get_latest_observation_value(
+                    request.fhirServer,
+                    patientId,
+                    LAB_LOINC_CODES.get("sodium"),
+                    accessToken,
+                ),
+                get_latest_observation_value(
+                    request.fhirServer,
+                    patientId,
+                    LAB_LOINC_CODES.get("inr"),
+                    accessToken,
+                ),
+                get_latest_observation_value(
+                    request.fhirServer,
+                    patientId,
+                    LAB_LOINC_CODES.get("albumin"),
+                    accessToken,
+                ),
+                get_latest_observation_value(
+                    request.fhirServer,
+                    patientId,
+                    LAB_LOINC_CODES.get("creatinine"),
+                    accessToken,
+                ),
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            if not isinstance(results[0], Exception):
+                bilirubin_value, bilirubin_date = results[0]
+                print(f"Bilirubin value: {bilirubin_value}")
+            else:
+                print(f"Error fetching Bilirubin value: {results[0]}")
+
+            if not isinstance(results[1], Exception):
+                sodium_value, sodium_date = results[1]
+                print(f"Sodium value: {sodium_value}")
+            else:
+                print(f"Error fetching Sodium value: {results[1]}")
+
+            if not isinstance(results[2], Exception):
+                inr_value, inr_date = results[2]
+                print(f"INR value: {inr_value}")
+            else:
+                print(f"Error fetching INR value: {results[2]}")
+
+            if not isinstance(results[3], Exception):
+                albumin_value, albumin_date = results[3]
+                print(f"Albumin value: {albumin_value}")
+            else:
+                print(f"Error fetching Albumin value: {results[3]}")
+
+            if not isinstance(results[4], Exception):
+                creatinine_value, creatinine_date = results[4]
+                print(f"Creatinine value: {creatinine_value}")
+            else:
+                print(f"Error fetching Creatinine value: {results[4]}")
+
+        except Exception as e:
+            print(f"Error in fetching observation values: {e}")
+    else:
+        print("FHIR server or patient ID not provided in the request.")
+
+    meld_score = None
+    try:
+        meld_score = calculate_meld_score(
+            MeldScoreParams(
+                sex=sex,
+                bilirubin=bilirubin_value,
+                sodium=sodium_value,
+                inr=inr_value,
+                albumin=albumin_value,
+                creatinine=creatinine_value,
+                had_dialysis=had_dialysis,
+                dob=dob,
+            )
+        )
+    except ValidationError as e:
+        print(f"Validation error calculating MELD score: {e}")
+        meld_score = None
+
     return {
         "cards": [
             {
                 "uuid": uuid4(),
-                "summary": "MELD Score (OPTN): 14",
+                "summary": f"MELD Score: {meld_score if meld_score is not None else 'Not calculated'}",
                 "indicator": "info",
                 "detail": f"""
 | Parameter   | Value   | Date   |
 |-------------|---------|--------|
-| Sex         | male    | 01/24  |
-| Bilirubin   | 1.2     | 01/24  |
-| Sodium      | 135     | 01/24  |
-| INR         | 1.1     | 01/24  |
-| Albumin     | 3.0     | 01/24  |
-| Creatinine  | 1.5     | 01/24  |
-| Had Dialysis| False   | 01/24  |
-| DOB         | 1990-01-01 | 01/24  |
+| Bilirubin   | {bilirubin_value if bilirubin_value != 0 else "Not found"} | {bilirubin_date if bilirubin_value != 0 else ""} |
+| Sodium      | {sodium_value if sodium_value != 0 else "Not found"}    | {sodium_date if sodium_value != 0 else ""}    |
+| INR         | {inr_value if inr_value != 0 else "Not found"}       | {inr_date if inr_value != 0 else ""}       |
+| Albumin     | {albumin_value if albumin_value != 0 else "Not found"}   | {albumin_date if albumin_value != 0 else ""}   |
+| Creatinine  | {creatinine_value if creatinine_value != 0 else "Not found"}| {creatinine_date if creatinine_value != 0 else ""}|
+| Had Dialysis| {had_dialysis}    |                  |
+| Sex         | {sex}             |                  |
+| DOB         | {dob}             |                  |
 """,
                 "source": {
                     "label": "OPTN",
@@ -151,7 +285,11 @@ def calculate_meld_score(params: MeldScoreParams) -> Optional[float]:
     try:
         # Calculate age
         today = datetime.today()
-        age = today.year - params.dob.year - ((today.month, today.day) < (params.dob.month, params.dob.day))
+        age = (
+            today.year
+            - params.dob.year
+            - ((today.month, today.day) < (params.dob.month, params.dob.day))
+        )
 
         # Only calculate if age >= 12
         if age < 12:
@@ -202,4 +340,3 @@ def calculate_meld_score(params: MeldScoreParams) -> Optional[float]:
     except Exception as e:
         print(f"Error calculating MELD score: {e}")
         return None
-
