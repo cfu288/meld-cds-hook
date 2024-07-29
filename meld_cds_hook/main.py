@@ -62,6 +62,10 @@ async def meld_optn_hook(request: HookRequest):
         sex = meld_params.sex
         dob = meld_params.dob
 
+        # Testing values
+        inr_value = 1.5
+        inr_date = "2021-01-01"
+
         try:
             response = calculate_meld_score(
                 MeldScoreParams(
