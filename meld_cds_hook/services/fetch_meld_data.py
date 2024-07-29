@@ -65,7 +65,7 @@ async def fetch_meld_data(
 ) -> MeldData:
     LAB_LOINC_CODES = {
         "total_bilirubin": "1975-2",
-        "sodium": "2947-0",
+        "sodium": "2951-2",
         "inr": "34714-6",
         "albumin": "1751-7",
         "creatinine": "2160-0",
