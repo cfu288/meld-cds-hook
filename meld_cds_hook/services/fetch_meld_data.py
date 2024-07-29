@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 
 @dataclass
-class MeldParamsUnverified:
+class MeldData:
     bilirubin_value: float = 0
     bilirubin_date: str = ""
     sodium_value: float = 0
@@ -60,9 +60,9 @@ async def get_latest_observation_value(
             return float(value), date
 
 
-async def fetch_meld_params(
+async def fetch_meld_data(
     fhir_server: str, patient_id: str, bearer: Optional[str]
-) -> MeldParamsUnverified:
+) -> MeldData:
     LAB_LOINC_CODES = {
         "total_bilirubin": "1975-2",
         "sodium": "2947-0",
@@ -91,7 +91,7 @@ async def fetch_meld_params(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        meld_params = MeldParamsUnverified()
+        meld_params = MeldData()
 
         if not isinstance(results[0], Exception):
             meld_params.bilirubin_value = results[0][0]
@@ -133,4 +133,4 @@ async def fetch_meld_params(
 
     except Exception as e:
         print(f"Error in fetching observation values: {e}")
-        return MeldParamsUnverified()
+        return MeldData()

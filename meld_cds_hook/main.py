@@ -5,7 +5,7 @@ from pydantic import ValidationError
 from meld_cds_hook.models.meld_score_params import MeldScoreParams
 from meld_cds_hook.services.calculate_meld_score import calculate_meld_score
 from meld_cds_hook.models.hook_request import HookRequest
-from meld_cds_hook.services.fetch_meld_params import fetch_meld_params
+from meld_cds_hook.services.fetch_meld_data import fetch_meld_data
 
 app = FastAPI()
 
@@ -48,9 +48,7 @@ async def meld_optn_hook(request: HookRequest):
     calculation_errors = []
 
     if request.fhirServer and patientId:
-        meld_params = await fetch_meld_params(
-            request.fhirServer, patientId, accessToken
-        )
+        meld_params = await fetch_meld_data(request.fhirServer, patientId, accessToken)
         bilirubin_value = meld_params.bilirubin_value
         bilirubin_date = meld_params.bilirubin_date
         sodium_value = meld_params.sodium_value
