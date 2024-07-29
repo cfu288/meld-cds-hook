@@ -1,9 +1,14 @@
+import datetime
+from typing import Optional, List
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
 from pydantic import ValidationError
 from meld_cds_hook.models.meld_score_params import MeldScoreParams
-from meld_cds_hook.services.calculate_meld_score import calculate_meld_score
+from meld_cds_hook.services.calculate_meld_score import (
+    calculate_meld_score,
+    calculate_age,
+)
 from meld_cds_hook.models.hook_request import HookRequest
 from meld_cds_hook.services.fetch_meld_data import fetch_meld_data
 
@@ -42,11 +47,6 @@ async def meld_optn_hook(request: HookRequest):
         else None
     )
 
-    meld_score = None
-    meld_score_without_dialysis = None
-    calculation_success = False
-    calculation_errors = []
-
     if request.fhirServer and patientId:
         meld_params = await fetch_meld_data(request.fhirServer, patientId, accessToken)
         bilirubin_value = meld_params.bilirubin_value
@@ -62,43 +62,44 @@ async def meld_optn_hook(request: HookRequest):
         sex = meld_params.sex
         dob = meld_params.dob
 
-        # Testing values
-        inr_value = 1.5
-        inr_date = "2021-01-01"
+        meld_score = None
+        meld_score_without_dialysis = None
+        calculation_success = False
+        calculation_errors = []
 
         try:
-            response = calculate_meld_score(
-                MeldScoreParams(
-                    sex=sex,
-                    bilirubin=bilirubin_value,
-                    sodium=sodium_value,
-                    inr=inr_value,
-                    albumin=albumin_value,
-                    creatinine=creatinine_value,
-                    had_dialysis=True,
-                    dob=dob,
-                )
+            ms_params_with_dialysis = MeldScoreParams(
+                sex=sex,
+                bilirubin=bilirubin_value,
+                sodium=sodium_value,
+                inr=inr_value,
+                albumin=albumin_value,
+                creatinine=creatinine_value,
+                had_dialysis=True,
+                dob=dob,
             )
+            ms_params_without_dialysis = MeldScoreParams(
+                sex=sex,
+                bilirubin=bilirubin_value,
+                sodium=sodium_value,
+                inr=inr_value,
+                albumin=albumin_value,
+                creatinine=creatinine_value,
+                had_dialysis=False,
+                dob=dob,
+            )
+
+            response = calculate_meld_score(ms_params_with_dialysis)
             calculation_success = response.success
             if calculation_success:
                 meld_score = response.value
                 meld_score_without_dialysis = calculate_meld_score(
-                    MeldScoreParams(
-                        sex=sex,
-                        bilirubin=bilirubin_value,
-                        sodium=sodium_value,
-                        inr=inr_value,
-                        albumin=albumin_value,
-                        creatinine=creatinine_value,
-                        had_dialysis=False,
-                        dob=dob,
-                    )
+                    ms_params_without_dialysis
                 ).value
             else:
                 calculation_errors = response.errors
                 print(f"Error calculating MELD score: {response.errors}")
         except ValidationError as e:
-            # set calculation errors
             calculation_errors = [error["msg"] for error in e.errors()]
             print(f"Validation error calculating MELD score: {e}")
 
@@ -118,7 +119,7 @@ async def meld_optn_hook(request: HookRequest):
             creatinine_value,
             creatinine_date,
             sex,
-            dob,
+            dob=dob if dob else None,
         )
 
         return {
@@ -142,25 +143,30 @@ async def meld_optn_hook(request: HookRequest):
 
 
 def generate_detail_markdown(
-    calculation_success,
-    meld_score,
-    meld_score_without_dialysis,
-    calculation_errors,
-    bilirubin_value,
-    bilirubin_date,
-    sodium_value,
-    sodium_date,
-    inr_value,
-    inr_date,
-    albumin_value,
-    albumin_date,
-    creatinine_value,
-    creatinine_date,
-    sex,
-    dob,
+    calculation_success: bool,
+    meld_score: Optional[float],
+    meld_score_without_dialysis: Optional[float],
+    calculation_errors: List[str],
+    bilirubin_value: float,
+    bilirubin_date: str,
+    sodium_value: float,
+    sodium_date: str,
+    inr_value: float,
+    inr_date: str,
+    albumin_value: float,
+    albumin_date: str,
+    creatinine_value: float,
+    creatinine_date: str,
+    sex: str,
+    dob: str,
 ):
-    markdown_error_list = "".join(
-        [f"- {error}\n" for error in calculation_errors] if calculation_errors else []
+    markdown_error_list = (
+        "".join(
+            [f"- {error}\n" for error in calculation_errors]
+            if calculation_errors
+            else []
+        )
+        + "\n---"
     )
     markdown_score_string = (
         f"**Score with dialysis:** *{meld_score}*; **w/o dialysis:** *{meld_score_without_dialysis}*"
@@ -168,14 +174,12 @@ def generate_detail_markdown(
         else "**Score:** *Not calculated*"
     )
 
-    errors_string = "Errors: \n" if calculation_errors else ""
+    errors_string = "---\n**Errors:** \n" if calculation_errors else ""
 
     return f"""{markdown_score_string}
 
-**{errors_string}**
+{errors_string}
 {markdown_error_list}
-
----
 
 | Parameter   | Value   | Date   |
 |-------------|---------|--------|
@@ -185,5 +189,5 @@ def generate_detail_markdown(
 | Albumin     | {albumin_value if albumin_value != 0 else "Not found"}   | {albumin_date if albumin_value != 0 else ""}   |
 | Creatinine  | {creatinine_value if creatinine_value != 0 else "Not found"}| {creatinine_date if creatinine_value != 0 else ""}|
 | Sex         | {sex}             |                  |
-| DOB         | {dob}             |                  |
+| Age         | {calculate_age(dob)}             |                  |
 """

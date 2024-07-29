@@ -1,9 +1,10 @@
 from typing import Optional, List
 from math import log
 from datetime import datetime
-from pydantic import ValidationError
+from pydantic import ValidationError, field_validator
 from meld_cds_hook.models.meld_score_params import MeldScoreParams
 from dataclasses import dataclass, field
+from pydantic import BaseModel
 
 
 @dataclass
@@ -13,16 +14,32 @@ class MeldScoreCalculatedResult:
     success: bool = False
 
 
+class DateOfBirthModel(BaseModel):
+    dob: datetime
+
+    @field_validator("dob")
+    @classmethod
+    def validate_and_convert_dob(cls, v):
+        if v > datetime.now():
+            raise ValueError("dob must be less than or equal to the current date")
+        return v
+
+
+def calculate_age(dob: str) -> int:
+    dob_model = DateOfBirthModel(dob=dob)
+    dob_datetime = dob_model.dob
+    today = datetime.today()
+    return (
+        today.year
+        - dob_datetime.year
+        - ((today.month, today.day) < (dob_datetime.month, dob_datetime.day))
+    )
+
+
 def calculate_meld_score(params: MeldScoreParams) -> MeldScoreCalculatedResult:
     response = MeldScoreCalculatedResult()
     try:
-        # Calculate age
-        today = datetime.today()
-        age = (
-            today.year
-            - params.dob.year
-            - ((today.month, today.day) < (params.dob.month, params.dob.day))
-        )
+        age = calculate_age(params.dob)
 
         # Only calculate if age >= 12
         if age < 12:
