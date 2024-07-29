@@ -66,4 +66,3 @@ class MeldScoreParams(BaseModel):
         if not (0.01 <= v <= 40):
             raise ValueError("creatinine must be between 0.01 and 40 mg/dL")
         return v
-

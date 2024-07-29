@@ -14,9 +14,11 @@ def test_calculate_meld_score():
         had_dialysis=False,
         dob=datetime(1990, 1, 1),
     )
-    score = calculate_meld_score(params)
-    assert score is not None
-    assert score == 14  # Expected MELD score based on provided values
+    response = calculate_meld_score(params)
+    assert response is not None
+    assert response.success
+    assert response.value == 14  # Expected MELD score based on provided values
+    assert not response.errors
 
 
 def test_calculate_meld_score_age_15():
@@ -30,10 +32,12 @@ def test_calculate_meld_score_age_15():
         had_dialysis=False,
         dob=datetime(datetime.today().year - 15, 1, 1),
     )
-    score = calculate_meld_score(params)
-    assert score is not None
-    # Expected MELD score for age 15 based on provided values
-    assert score == 16
+
+    response = calculate_meld_score(params)
+    assert response is not None
+    assert response.success
+    assert response.value == 16  # Expected MELD score based on provided values
+    assert not response.errors
 
 
 def test_bilirubin_validation():
