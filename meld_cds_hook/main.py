@@ -75,9 +75,9 @@ async def meld_optn_hook(request: HookRequest):
                     dob=dob,
                 )
             )
-            calculation_success = response["success"]
+            calculation_success = response.success
             if calculation_success:
-                meld_score = response["value"]
+                meld_score = response.value
                 meld_score_without_dialysis = calculate_meld_score(
                     MeldScoreParams(
                         sex=sex,
@@ -89,10 +89,10 @@ async def meld_optn_hook(request: HookRequest):
                         had_dialysis=False,
                         dob=dob,
                     )
-                )["value"]
+                ).value
             else:
-                calculation_errors = response["errors"]
-                print(f"Error calculating MELD score: {response['errors']}")
+                calculation_errors = response.errors
+                print(f"Error calculating MELD score: {response.errors}")
         except ValidationError as e:
             # set calculation errors
             calculation_errors = [error["msg"] for error in e.errors()]
@@ -164,9 +164,11 @@ def generate_detail_markdown(
         else "**Score:** *Not calculated*"
     )
 
+    errors_string = "Errors: \n" if calculation_errors else ""
+
     return f"""{markdown_score_string}
 
-Errors: \n
+**{errors_string}**
 {markdown_error_list}
 
 ---

@@ -24,7 +24,6 @@ async def get_patient_data(
     fhir_server: str, patient_id: str, bearer: Optional[str]
 ) -> tuple[str, str]:
     url = f"{fhir_server}/Patient/{patient_id}"
-    print(url)
     headers = {}
     if bearer:
         headers["Authorization"] = f"Bearer {bearer}"
@@ -32,7 +31,6 @@ async def get_patient_data(
         async with session.get(url, headers=headers) as response:
             response.raise_for_status()
             patient_data = await response.json()
-            print(patient_data)
             if not patient_data:
                 raise ValueError(f"No patient data found for patient ID {patient_id}.")
             sex = patient_data.get("gender", "")
